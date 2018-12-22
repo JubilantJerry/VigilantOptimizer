@@ -20,6 +20,7 @@ def main():
     random.seed(1337)
     np.random.seed(1337)
     torch.random.manual_seed(1337)
+
     train_cifar = datasets.CIFAR10(
         root='./data/cifar',
         train=True,

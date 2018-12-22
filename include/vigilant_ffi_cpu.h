@@ -1,24 +1,38 @@
+#ifndef VIGILANT_FFI_CPU_H
+#define VIGILANT_FFI_CPU_H
+
+#define CUDA_EMULATE
+
+#include <torch/extension.h>
+#include "vigilant_update.h"
+
 int statsUpdate(
     int minSample,
-    THIntTensor *sampleSize,
-    THFloatTensor *mean,
-    THFloatTensor *meanSq,
-    THFloatTensor *oldMean,
-    THIntTensor *time,
-    THFloatTensor *weight,
-    THFloatTensor *weightedSampleSize,
-    THFloatTensor *weightedAcceler,
-    THFloatTensor *grads
+    at::Tensor sampleSize,
+    at::Tensor mean,
+    at::Tensor meanSq,
+    at::Tensor oldMean,
+    at::Tensor time,
+    at::Tensor weight,
+    at::Tensor weightedSampleSize,
+    at::Tensor weightedAcceler,
+    at::Tensor grads
 );
 
 int stepUpdate(
-    float maxUpdate,
-    THFloatTensor *mean,
-    THFloatTensor *meanSq,
-    THFloatTensor *step,
-    THFloatTensor *prevUpdate,
+    at::Tensor mean,
+    at::Tensor meanSq,
+    at::Tensor step,
+    at::Tensor prevUpdate,
     float stepDecay,
     float stepFactorOverSampleSize,
-    THFloatTensor *grads,
-    THFloatTensor *data
+    at::Tensor grads,
+    at::Tensor data
 );
+
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+  m.def("statsUpdate", &statsUpdate, "Vigilant statsUpdate");
+  m.def("stepUpdate", &stepUpdate, "Vigilant stepUpdate");
+}
+
+#endif

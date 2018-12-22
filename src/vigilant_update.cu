@@ -67,7 +67,7 @@ TOPLEVEL_SIMP static void statsUpdateKernel(statsUpdateArgs args) {
     args.weightedAcceler[idx] = weight * acceler;
 }
 
-void statsUpdateImpl(statsUpdateArgs args, cudaStream_t stream) {
+void statsUpdateImpl(statsUpdateArgs args) {
 
     int threadsPerBlock = THREADS_PER_BLOCK;
     #ifdef CUDA_EMULATE
@@ -78,9 +78,7 @@ void statsUpdateImpl(statsUpdateArgs args, cudaStream_t stream) {
         statsUpdateKernel,
         LAUNCH_PARAMS(
             TO_DIM3((args.numElems + threadsPerBlock - 1) / threadsPerBlock),
-            TO_DIM3(threadsPerBlock),
-            0,
-            stream
+            TO_DIM3(threadsPerBlock)
         ),
         args
     );
@@ -101,9 +99,6 @@ TOPLEVEL_SIMP static void stepUpdateKernel(stepUpdateArgs args) {
     // Compute a new step size
     float meanSq = args.meanSq[idx];
     float step = args.step[idx];
-    if (meanSq <= 0.0f) {
-        meanSq = 1.0f;
-    }
 
     step = stepDecay * step + \
            (1.0 - stepDecay) * grad * rsqrtf(meanSq);
@@ -111,12 +106,6 @@ TOPLEVEL_SIMP static void stepUpdateKernel(stepUpdateArgs args) {
     // Update the data
     float prevUpdate = args.prevUpdate[idx];
     float update = stepFactorOverSampleSize * step;
-    if (update > args.maxUpdate) {
-        update = args.maxUpdate;
-    }
-    if (update < -args.maxUpdate) {
-        update = -args.maxUpdate;
-    }
 
     args.step[idx] = step;
     args.data[idx] += (prevUpdate - update) - stepDecay * update;
@@ -124,7 +113,7 @@ TOPLEVEL_SIMP static void stepUpdateKernel(stepUpdateArgs args) {
 }
 
 
-void stepUpdateImpl(stepUpdateArgs args, cudaStream_t stream) {
+void stepUpdateImpl(stepUpdateArgs args) {
     int threadsPerBlock = THREADS_PER_BLOCK;
     #ifdef CUDA_EMULATE
         threadsPerBlock = args.numElems;
@@ -134,9 +123,7 @@ void stepUpdateImpl(stepUpdateArgs args, cudaStream_t stream) {
         stepUpdateKernel,
         LAUNCH_PARAMS(
             TO_DIM3((args.numElems + threadsPerBlock - 1) / threadsPerBlock),
-            TO_DIM3(threadsPerBlock),
-            0,
-            stream
+            TO_DIM3(threadsPerBlock)
         ),
         args
     );

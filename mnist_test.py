@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 
+import numpy as np
+import random
 import torch
 import torch.nn
 import torch.utils.data
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
-from vigilant.optim import Vigilant
+from vigilant import Vigilant as Vigilant
 
 
 def main():
+    random.seed(1337)
+    np.random.seed(1337)
+    torch.random.manual_seed(1337)
+
     train_mnist = datasets.MNIST(
         root='./data/mnist',
         train=True,

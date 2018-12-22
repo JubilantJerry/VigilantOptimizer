@@ -1,15 +1,12 @@
 import torch
 from torch.optim.optimizer import Optimizer
-from ._ext import cpu as extCpu
 
-if torch.cuda.is_available():
-    from ._ext import cuda as extCuda
-
+FINITE_DIFF_CONST = 0.145
 ACCELER_CONST = 5.0
 ACCELER_MAG_CONST = 1.442695
 
 
-class Vigilant(Optimizer):
+class VigilantBase(Optimizer):
     """Implements Vigilant algorithm.
 
     Arguments:
@@ -25,9 +22,6 @@ class Vigilant(Optimizer):
         allow arbitrarily slow changes to the update direction.
         Default: 10
 
-        max_update (float): maximum update magnitude for each
-        parameter after ``max_latency`` updates. Default: 0.05
-
         init_lr (float, optional): initial learning rate.
         Default: 0.0001
 
@@ -38,18 +32,14 @@ class Vigilant(Optimizer):
     def __init__(self, params,
                  max_sample=1000,
                  max_latency=10,
-                 max_update=0.05,
                  init_lr=0.0001,
                  min_sample=4):
-        if not (max_sample is None or min_sample <= max_sample):
-            raise ValueError("Invalid maximum sample size: {}"
-                             .format(max_sample))
         if not (max_latency is None or 1 <= max_latency):
             raise ValueError("Invalid max latency value: {}"
                              .format(max_latency))
-        if not 0.0 <= max_update:
-            raise ValueError("Invalid max update magnitude: {}"
-                             .format(max_update))
+        if not (max_sample is None or min_sample <= max_sample):
+            raise ValueError("Invalid maximum sample size: {}"
+                             .format(max_sample))
         if not 0.0 <= init_lr:
             raise ValueError("Invalid initial learning rate: {}"
                              .format(init_lr))
@@ -61,13 +51,12 @@ class Vigilant(Optimizer):
 
         defaults = dict(max_latency=max_latency,
                         max_sample=max_sample,
-                        max_update=max_update,
                         init_step_factor=init_step_factor,
                         min_sample=min_sample)
-        super(Vigilant, self).__init__(params, defaults)
+        super(VigilantBase, self).__init__(params, defaults)
 
     def __setstate__(self, state):
-        super(Vigilant, self).__setstate__(state)
+        super(VigilantBase, self).__setstate__(state)
 
     def step(self, closure=None):
         """Performs a single optimization step.
@@ -80,9 +69,9 @@ class Vigilant(Optimizer):
             loss = closure()
 
         for group in self.param_groups:
-            weight_sum = 0
             sample_size_sum = 0
             acceler_sum = 0
+            weight_sum = 0
             step_factor = None
             acceler_accum = None
 
@@ -110,16 +99,6 @@ class Vigilant(Optimizer):
                     state['step'] = torch.zeros_like(p.data)
                     state['prev_update'] = torch.zeros_like(p.data)
 
-                    state['weight'] = torch.zeros_like(p.data)
-                    state['weighted_sample_size'] = torch.zeros_like(p.data)
-                    state['weighted_acceler'] = torch.zeros_like(p.data)
-
-                if state['sample_size'].dtype != torch.int:
-                    state['sample_size'] = state['sample_size'].int()
-
-                if state['time'].dtype != torch.int:
-                    state['time'] = state['time'].int()
-
                 if 'step_factor' in state:
                     step_factor = state['step_factor']
 
@@ -143,37 +122,54 @@ class Vigilant(Optimizer):
 
             for p in group['params']:
                 state = self.state[p]
-                lib = extCuda if p.data.is_cuda else extCpu
+                grad = p.grad.data
+
+                sample_size = state['sample_size']
+                mean = state['mean']
+                mean_sq = state['mean_sq']
                 min_sample = group['min_sample']
                 max_sample = group['max_sample']
 
-                lib.statsUpdate(
-                    min_sample,
-                    state['sample_size'],
-                    state['mean'],
-                    state['mean_sq'],
-                    state['old_mean'],
-                    state['time'],
-                    state['weight'],
-                    state['weighted_sample_size'],
-                    state['weighted_acceler'],
-                    p.grad.data
-                )
+                sample_decay = 1.0 - 1.0 / sample_size.float()
+                mean.mul_(sample_decay).add_(
+                    (1 - sample_decay) * grad)
+                mean_sq.mul_(sample_decay).add_(
+                    (1 - sample_decay) * grad ** 2)
+                mean_sq[mean_sq <= 0.0] = 1.0
 
-                weight = state['weight']
-                weighted_sample_size = state['weighted_sample_size']
-                weighted_acceler = state['weighted_acceler']
+                sq_mean = mean ** 2
+                var = mean_sq - sq_mean
+                sample_size.add_(
+                    2 * (sq_mean < var / sample_size.float()).int() - 1)
+                sample_size.clamp_(min=min_sample)
+
+                weight = sq_mean / torch.sqrt(mean_sq)
                 weight_sum += weight.sum(
                     dim=tuple(range(weight.dim())))
-                sample_size_sum += weighted_sample_size.sum(
-                    dim=tuple(range(weighted_sample_size.dim())))
-                acceler_sum += weighted_acceler.sum(
-                    dim=tuple(range(weighted_acceler.dim())))
+                sample_size_sum += (sample_size.float() * weight).sum(
+                    dim=tuple(range(sample_size.dim())))
+
+                old_mean = state['old_mean']
+                time = state['time']
+
+                time.add_(1)
+                tick_mask = (time > sample_size / 2)
+                old_mean_masked = old_mean[tick_mask]
+                mean_masked = mean[tick_mask]
+                old_mean_sign = 2 * (old_mean_masked > 0.0).float() - 1.0
+                acceler = 2 * (
+                    old_mean_sign * (old_mean_masked - mean_masked) <
+                    old_mean_sign * (old_mean_masked * FINITE_DIFF_CONST)
+                ).int() - 1
+                acceler_sum += (acceler.float() * weight[tick_mask]).sum(
+                    dim=tuple(range(acceler.dim())))
+                time[tick_mask] = 0
+                old_mean[tick_mask] = mean_masked
 
             weight_sum = weight_sum.item()
-            if weight_sum <= 0.0:
+            if weight_sum < 0.0:
                 weight_sum = 1.0
-            sample_size_mean = sample_size_sum.item() / weight_sum
+            sample_size_mean = (sample_size_sum / weight_sum).item()
 
             acceler_mean_full = acceler_sum / weight_sum + acceler_accum
             acceler_max_mag = ACCELER_MAG_CONST / sample_size_mean
@@ -193,8 +189,6 @@ class Vigilant(Optimizer):
             step_factor_over_sample_size = \
                 step_factor.item() / sample_size_mean
 
-            max_update_scaled = group['max_update'] / sample_size_clipped
-
             if max_sample is not None and sample_size_mean >= max_sample:
                 step_factor.div_(2.0)
                 for p in group['params']:
@@ -205,18 +199,17 @@ class Vigilant(Optimizer):
 
             for p in group['params']:
                 state = self.state[p]
-                lib = extCuda if p.data.is_cuda else extCpu
+                grad = p.grad.data
 
-                lib.stepUpdate(
-                    max_update_scaled,
-                    state['mean'],
-                    state['mean_sq'],
-                    state['step'],
-                    state['prev_update'],
-                    step_decay,
-                    step_factor_over_sample_size,
-                    p.grad.data,
-                    p.data
-                )
+                step = state['step']
+                mean_sq = state['mean_sq']
+                step.mul_(step_decay).addcdiv_(
+                    1.0 - step_decay, grad,
+                    torch.sqrt(mean_sq))
+
+                prev_update = state['prev_update']
+                update = step_factor_over_sample_size * step
+                p.data.add_((prev_update - (1.0 + step_decay) * update))
+                prev_update.set_(step_decay * update)
 
         return loss
