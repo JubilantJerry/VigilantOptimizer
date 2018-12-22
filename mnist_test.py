@@ -9,6 +9,8 @@ import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 from vigilant import Vigilant as Vigilant
 
+DISPLAY_PERIOD = 32
+
 
 def main():
     random.seed(1337)
@@ -50,13 +52,16 @@ def main():
 
     optimizer = Vigilant(network.parameters())
     # optimizer = torch.optim.Adam(network.parameters(), lr=0.0005)
+
     criterion = torch.nn.CrossEntropyLoss()
 
     for i in range(20):
         mean_loss = 0
         loss_count = 0
+        counter = 0
 
         network.train()
+        print("  ", end='')
 
         for batch, labels in train_loader:
             batch, labels = batch.cuda(), labels.cuda()
@@ -72,6 +77,11 @@ def main():
             print("%.2f" % loss.item(), end=' ', flush=True)
             mean_loss += loss.item() * batch_size
             loss_count += batch_size
+
+            counter += 1
+            if counter == DISPLAY_PERIOD:
+                counter = 0
+                optimizer.show_step_factor()
 
         mean_loss /= loss_count
         print("")

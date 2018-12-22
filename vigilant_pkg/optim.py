@@ -1,9 +1,11 @@
 import torch
 from torch.optim.optimizer import Optimizer
 from ._ext import cpu as extCpu
+from .curpos import get_pos, set_pos
 
 if torch.cuda.is_available():
     from ._ext import cuda as extCuda
+
 
 ACCELER_CONST = 5.0
 ACCELER_MAG_CONST = 1.442695
@@ -57,6 +59,8 @@ class Vigilant(Optimizer):
                         init_step_factor=init_step_factor,
                         min_sample=min_sample)
         super(Vigilant, self).__init__(params, defaults)
+
+        self.print_info = {'lr': 0.0}
 
     def __setstate__(self, state):
         super(Vigilant, self).__setstate__(state)
@@ -208,4 +212,17 @@ class Vigilant(Optimizer):
                     p.data
                 )
 
+        self.print_info['lr'] = step_factor_over_sample_size
+
         return loss
+
+    def show_step_factor(self):
+        (_, col) = get_pos()
+        print('\n\n\n', end='')
+        print('\033[3A', end='')
+        (line, _) = get_pos()
+        set_pos(line, col)
+
+        lr = self.print_info['lr']
+        print('\n\n\033[2K\n' + "Learning rate: %0.8f" % lr, end='')
+        set_pos(line, col)

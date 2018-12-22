@@ -1,5 +1,6 @@
 import torch
 from torch.optim.optimizer import Optimizer
+from .curpos import get_pos, set_pos
 
 FINITE_DIFF_CONST = 0.145
 ACCELER_CONST = 5.0
@@ -54,6 +55,8 @@ class VigilantBase(Optimizer):
                         init_step_factor=init_step_factor,
                         min_sample=min_sample)
         super(VigilantBase, self).__init__(params, defaults)
+
+        self.print_info = {'lr': 0.0}
 
     def __setstate__(self, state):
         super(VigilantBase, self).__setstate__(state)
@@ -212,4 +215,17 @@ class VigilantBase(Optimizer):
                 p.data.add_((prev_update - (1.0 + step_decay) * update))
                 prev_update.set_(step_decay * update)
 
+        self.print_info['lr'] = step_factor_over_sample_size
+
         return loss
+
+    def show_step_factor(self):
+        (_, col) = get_pos()
+        print('\n\n\n', end='')
+        print('\033[3A', end='')
+        (line, _) = get_pos()
+        set_pos(line, col)
+
+        lr = self.print_info['lr']
+        print('\n\n\033[2K\n' + "Learning rate: %0.8f" % lr, end='')
+        set_pos(line, col)
