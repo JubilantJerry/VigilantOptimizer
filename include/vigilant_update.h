@@ -28,9 +28,11 @@ typedef struct stepUpdateArgs {
     float * __restrict__ mean;
     float * __restrict__ meanSq;
     float * __restrict__ step;
-    float * __restrict__ prevUpdate;
+    float * __restrict__ deviation;
     float stepDecay;
     float stepFactorOverSampleSize;
+    float baseLr;
+    float deviationDecay;
     float * __restrict__ grads;
     float * __restrict__ data;
 } stepUpdateArgs;

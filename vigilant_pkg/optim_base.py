@@ -4,7 +4,8 @@ from .curpos import get_pos, set_pos
 
 FINITE_DIFF_CONST = 0.145
 ACCELER_CONST = 5.0
-ACCELER_MAG_CONST = 1.442695
+RAMP_UP_POWER = 2.0
+DEFAULT_RAMP_PERIOD = 1000
 
 
 class VigilantBase(Optimizer):
@@ -13,10 +14,6 @@ class VigilantBase(Optimizer):
     Arguments:
         params (iterable): iterable of parameters to optimize
         or dicts defining parameter groups
-
-        max_sample (int): largest sample size allowed
-        to analyze the gradient. Can be None to allow arbitrarily
-        large samples. Default: 1000
 
         max_latency (int, optional): effective number of samples
         averaged to compute the update direction. Can be None to
@@ -31,29 +28,35 @@ class VigilantBase(Optimizer):
     """
 
     def __init__(self, params,
-                 max_sample=1000,
+                 base_lr=0.0001,
+                 min_sample=4,
+                 max_sample=3000,
                  max_latency=10,
-                 init_lr=0.0001,
-                 min_sample=4):
-        if not (max_latency is None or 1 <= max_latency):
-            raise ValueError("Invalid max latency value: {}"
-                             .format(max_latency))
-        if not (max_sample is None or min_sample <= max_sample):
-            raise ValueError("Invalid maximum sample size: {}"
-                             .format(max_sample))
-        if not 0.0 <= init_lr:
-            raise ValueError("Invalid initial learning rate: {}"
-                             .format(init_lr))
+                 explore_dist=5):
+        if not 0.0 <= base_lr:
+            raise ValueError("Invalid base learning rate: {}"
+                             .format(base_lr))
         if not 1 <= min_sample:
             raise ValueError("Invalid minimum sample size: {}"
                              .format(min_sample))
+        if not min_sample <= max_sample:
+            raise ValueError("Invalid maximum sample size: {}"
+                             .format(max_sample))
+        if not (max_latency is None or 1 <= max_latency):
+            raise ValueError("Invalid max latency value: {}"
+                             .format(max_latency))
+        if not 1 <= explore_dist:
+            raise ValueError("Invalid exploration distance: {}"
+                             .format(explore_dist))
 
-        init_step_factor = init_lr * min_sample
+        init_step_factor = base_lr * min_sample / (max_sample ** RAMP_UP_POWER)
 
-        defaults = dict(max_latency=max_latency,
+        defaults = dict(init_step_factor=init_step_factor,
+                        base_lr=base_lr,
+                        min_sample=min_sample,
                         max_sample=max_sample,
-                        init_step_factor=init_step_factor,
-                        min_sample=min_sample)
+                        max_latency=max_latency,
+                        explore_dist=explore_dist)
         super(VigilantBase, self).__init__(params, defaults)
 
         self.print_info = {'lr': 0.0}
@@ -76,7 +79,6 @@ class VigilantBase(Optimizer):
             acceler_sum = 0
             weight_sum = 0
             step_factor = None
-            acceler_accum = None
 
             for p in group['params']:
                 if p.grad is None:
@@ -100,13 +102,10 @@ class VigilantBase(Optimizer):
                         torch.zeros_like(p.data, dtype=torch.int)
 
                     state['step'] = torch.zeros_like(p.data)
-                    state['prev_update'] = torch.zeros_like(p.data)
+                    state['deviation'] = torch.zeros_like(p.data)
 
                 if 'step_factor' in state:
                     step_factor = state['step_factor']
-
-                if 'acceler_accum' in state:
-                    acceler_accum = state['acceler_accum']
 
             if step_factor is None:
                 for p in group['params']:
@@ -114,13 +113,6 @@ class VigilantBase(Optimizer):
                         self.state[p]['step'].new_tensor(
                             group['init_step_factor']))
                     step_factor = self.state[p]['step_factor']
-                    break
-
-            if acceler_accum is None:
-                for p in group['params']:
-                    self.state[p]['acceler_accum'] = \
-                        self.state[p]['step'].new_tensor(0.0)
-                    acceler_accum = self.state[p]['acceler_accum']
                     break
 
             for p in group['params']:
@@ -174,13 +166,7 @@ class VigilantBase(Optimizer):
                 weight_sum = 1.0
             sample_size_mean = (sample_size_sum / weight_sum).item()
 
-            acceler_mean_full = acceler_sum / weight_sum + acceler_accum
-            acceler_max_mag = ACCELER_MAG_CONST / sample_size_mean
-            acceler_mean = torch.clamp(
-                acceler_mean_full,
-                min=-acceler_max_mag, max=acceler_max_mag).item()
-            acceler_accum.copy_(acceler_mean_full - acceler_mean)
-
+            acceler_mean = (acceler_sum / weight_sum).item()
             step_factor.mul_(ACCELER_CONST ** acceler_mean).clamp_(max=1.0)
 
             max_latency = group['max_latency']
@@ -192,7 +178,7 @@ class VigilantBase(Optimizer):
             step_factor_over_sample_size = \
                 step_factor.item() / sample_size_mean
 
-            if max_sample is not None and sample_size_mean >= max_sample:
+            if sample_size_mean >= max_sample:
                 step_factor.div_(2.0)
                 for p in group['params']:
                     state = self.state[p]
@@ -200,24 +186,44 @@ class VigilantBase(Optimizer):
                     state['time'].zero_()
                     state['old_mean'].copy_(state['mean'])
 
+            deviation_decay = 1.0 - 1.0 / group['explore_dist']
+
             for p in group['params']:
                 state = self.state[p]
                 grad = p.grad.data
 
                 step = state['step']
                 mean_sq = state['mean_sq']
+                sqrt_mean_sq = torch.sqrt(mean_sq)
+
                 step.mul_(step_decay).addcdiv_(
                     1.0 - step_decay, grad,
-                    torch.sqrt(mean_sq))
+                    sqrt_mean_sq)
 
-                prev_update = state['prev_update']
                 update = step_factor_over_sample_size * step
-                p.data.add_((prev_update - (1.0 + step_decay) * update))
-                prev_update.set_(step_decay * update)
+
+                deviation = state['deviation']
+                explore_update = group['base_lr'] * grad / sqrt_mean_sq
+                new_deviation = deviation_decay * deviation - explore_update
+
+                p.data.add_(-update - deviation + new_deviation)
+                deviation.copy_(new_deviation)
 
         self.print_info['lr'] = step_factor_over_sample_size
 
         return loss
+
+    def remove_deviation(self):
+        for group in self.param_groups:
+            for p in group['params']:
+                deviation = self.state[p]['deviation']
+                p.data.add_(-deviation)
+
+    def restore_deviation(self):
+        for group in self.param_groups:
+            for p in group['params']:
+                deviation = self.state[p]['deviation']
+                p.data.add_(deviation)
 
     def show_step_factor(self):
         (_, col) = get_pos()

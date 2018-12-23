@@ -23,9 +23,11 @@ int stepUpdate(
     at::Tensor mean,
     at::Tensor meanSq,
     at::Tensor step,
-    at::Tensor prevUpdate,
+    at::Tensor deviation,
     float stepDecay,
     float stepFactorOverSampleSize,
+    float baseLr,
+    float deviationDecay,
     at::Tensor grads,
     at::Tensor data
 );

@@ -49,6 +49,7 @@ def main():
     for p in network.parameters():
         if p.dim() != 1:
             torch.nn.init.xavier_normal_(p)
+    # network.load_state_dict(torch.load("net.pth"))
 
     optimizer = Vigilant(network.parameters())
     # optimizer = torch.optim.Adam(network.parameters(), lr=0.0005)
@@ -87,6 +88,8 @@ def main():
         print("")
         print("Mean for epoch %d: %f" % (i, mean_loss))
 
+        optimizer.remove_deviation()
+
         network.eval()
 
         mean_loss = 0
@@ -108,6 +111,8 @@ def main():
         mean_accuracy /= count
         print("Test: loss %f, accuracy %f" % (mean_loss, mean_accuracy))
         torch.save(network, "net_mnist.pth")
+
+        optimizer.restore_deviation()
 
 
 if __name__ == '__main__':

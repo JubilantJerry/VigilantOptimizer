@@ -39,9 +39,11 @@ int stepUpdate(
         at::Tensor mean,
         at::Tensor meanSq,
         at::Tensor step,
-        at::Tensor prevUpdate,
+        at::Tensor deviation,
         float stepDecay,
         float stepFactorOverSampleSize,
+        float baseLr,
+        float deviationDecay,
         at::Tensor grads,
         at::Tensor data) {
 
@@ -50,9 +52,11 @@ int stepUpdate(
     args.mean = mean.data<float>();
     args.meanSq = meanSq.data<float>();
     args.step = step.data<float>();
-    args.prevUpdate = prevUpdate.data<float>();
+    args.deviation = deviation.data<float>();
     args.stepDecay = stepDecay;
     args.stepFactorOverSampleSize = stepFactorOverSampleSize;
+    args.baseLr = baseLr;
+    args.deviationDecay = deviationDecay;
     args.grads = grads.data<float>();
     args.data = data.data<float>();
 

@@ -97,19 +97,22 @@ TOPLEVEL_SIMP static void stepUpdateKernel(stepUpdateArgs args) {
     float stepFactorOverSampleSize = args.stepFactorOverSampleSize;
 
     // Compute a new step size
-    float meanSq = args.meanSq[idx];
     float step = args.step[idx];
+    float meanSq = args.meanSq[idx];
+    float rsqrtMeanSq = rsqrtf(meanSq);
 
-    step = stepDecay * step + \
-           (1.0 - stepDecay) * grad * rsqrtf(meanSq);
+    step = stepDecay * step + (1.0 - stepDecay) * grad * rsqrtMeanSq;
 
     // Update the data
-    float prevUpdate = args.prevUpdate[idx];
     float update = stepFactorOverSampleSize * step;
 
+    float deviation = args.deviation[idx];
+    float exploreUpdate = args.baseLr * grad * rsqrtMeanSq;
+    float newDeviation = args.deviationDecay * deviation - exploreUpdate;
+
     args.step[idx] = step;
-    args.data[idx] += (prevUpdate - update) - stepDecay * update;
-    args.prevUpdate[idx] = stepDecay * update;
+    args.data[idx] += (-update - deviation + newDeviation);
+    args.deviation[idx] = newDeviation;
 }
 
 

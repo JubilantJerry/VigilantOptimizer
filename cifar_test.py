@@ -7,7 +7,9 @@ import torch.nn
 import torch.utils.data
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
-from vigilant.optim import Vigilant
+from vigilant import Vigilant as Vigilant
+
+DISPLAY_PERIOD = 16
 
 
 class GlobalAvgPool(torch.nn.Module):
@@ -65,17 +67,18 @@ def main():
             torch.nn.init.xavier_normal_(p)
     # network.load_state_dict(torch.load("net.pth"))
 
-    ballpark_optimizer = torch.optim.Adam(network.parameters(), lr=0.001)
-    final_optimizer = Vigilant(network.parameters())
+    optimizer = Vigilant(network.parameters())
+    # optimizer = torch.optim.Adam(network.parameters(), lr=0.0005)
+
     criterion = torch.nn.CrossEntropyLoss()
 
-    for i in range(150):
+    for i in range(300):
         mean_loss = 0
         loss_count = 0
+        counter = 0
 
         network.train()
-
-        optimizer = ballpark_optimizer if (i < 10) else final_optimizer
+        print("  ", end='')
 
         for batch, labels in train_loader:
             batch, labels = batch.cuda(), labels.cuda()
@@ -91,9 +94,16 @@ def main():
             mean_loss += loss.item() * batch_size
             loss_count += batch_size
 
+            counter += 1
+            if counter == DISPLAY_PERIOD:
+                counter = 0
+                optimizer.show_step_factor()
+
         mean_loss /= loss_count
         print("")
         print("Mean for epoch %d: %f" % (i, mean_loss))
+
+        optimizer.remove_deviation()
 
         network.eval()
 
@@ -115,6 +125,8 @@ def main():
         mean_accuracy /= count
         print("Test: loss %f, accuracy %f" % (mean_loss, mean_accuracy))
         torch.save(network.state_dict(), "net_cifar.pth")
+
+        optimizer.restore_deviation()
 
 
 if __name__ == '__main__':
